@@ -19,7 +19,7 @@ services:
       - 8123:8123
       - 9181:9181
     volumes:
-      - "/clickhousedb-data/clickhouse-blue-1/dataDir:/var/lib/clickhouse"
+      - "/clickhousedb-data/clickhouse-blue-1:/var/lib/clickhouse"
       - "./configs/gen/clickhouse-blue-1:/etc/clickhouse-server/config.d/"
 
   clickhouse-blue-2:
@@ -31,7 +31,7 @@ services:
       - 8124:8123
       - 9182:9181
     volumes:
-      - "/clickhousedb-data/clickhouse-blue-2/dataDir:/var/lib/clickhouse"
+      - "/clickhousedb-data/clickhouse-blue-2:/var/lib/clickhouse"
       - "./configs/gen/clickhouse-blue-2:/etc/clickhouse-server/config.d/"
 
   clickhouse-green-1:
@@ -43,7 +43,7 @@ services:
       - 8125:8123
       - 9183:9181
     volumes:
-      - "/clickhousedb-data/clickhouse-green-1/dataDir:/var/lib/clickhouse"
+      - "/clickhousedb-data/clickhouse-green-1:/var/lib/clickhouse"
       - "./configs/gen/clickhouse-green-1:/etc/clickhouse-server/config.d/"
 
   clickhouse-green-2:
@@ -55,7 +55,7 @@ services:
       - 8126:8123
       - 9184:9181
     volumes:
-      - "/clickhousedb-data/clickhouse-green-2/dataDir:/var/lib/clickhouse"
+      - "/clickhousedb-data/clickhouse-green-2:/var/lib/clickhouse"
       - "./configs/gen/clickhouse-green-2:/etc/clickhouse-server/config.d/"
 
   # clickhouse-orange-1:
@@ -67,7 +67,7 @@ services:
   #     - 8127:8123
   #     - 9185:9181
   #   volumes:
-  #     - "/clickhousedb-data/clickhouse-orange-1/dataDir:/var/lib/clickhouse"
+  #     - "/clickhousedb-data/clickhouse-orange-1:/var/lib/clickhouse"
   #     - "./configs/gen/clickhouse-orange-1:/etc/clickhouse-server/config.d/"
 
   # clickhouse-orange-2:
@@ -79,5 +79,5 @@ services:
   #     - 8128:8123
   #     - 9186:9181
   #   volumes:
-  #     - "/clickhousedb-data/clickhouse-orange-2/dataDir:/var/lib/clickhouse"
+  #     - "/clickhousedb-data/clickhouse-orange-2:/var/lib/clickhouse"
   #     - "./configs/gen/clickhouse-orange-2:/etc/clickhouse-server/config.d/"

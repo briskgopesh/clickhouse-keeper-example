@@ -32,6 +32,13 @@ gen-clickhouse-config:
 # 	REPLICA=r2 SHARD=orange envsubst < ${BASE_CONFIG_DIR}/macros.xml > ${GEN_CONFIG_DIR}/clickhouse-orange-2/macros.xml
 # 	cp ${BASE_CONFIG_DIR}/remote_servers.xml ${BASE_CONFIG_DIR}/use_keeper.xml ${BASE_CONFIG_DIR}/docker_related_config.xml ${GEN_CONFIG_DIR}/clickhouse-orange-2/
 
+.PHONY: config
+config:
+	rm -rf /clickhousedb-data/clickhouse-blue-1 /clickhousedb-data/clickhouse-blue-2 /clickhousedb-data/clickhouse-green-1 /clickhousedb-data/clickhouse-green-2
+	mkdir -p /clickhousedb-data/clickhouse-blue-1 /clickhousedb-data/clickhouse-blue-2 /clickhousedb-data/clickhouse-green-1 /clickhousedb-data/clickhouse-green-2
+# 	rm -rf /clickhousedb-data/clickhouse-orange-1 /clickhousedb-data/clickhouse-orange-2
+# 	mkdir -p /clickhousedb-data/clickhouse-orange-1 /clickhousedb-data/clickhouse-orange-2
+
 .PHONY: up
 up:
 	docker-compose up
