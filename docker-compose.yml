@@ -2,7 +2,7 @@ version: "3.7"
 
 x-clickhouse-defaults: &clickhouse-defaults
   restart: unless-stopped
-  image: yandex/clickhouse-server:21.12.2.17
+  image: yandex/clickhouse-server:22.1.3.7
   ulimits:
     nproc: 65535
     nofile:
@@ -19,9 +19,7 @@ services:
       - 8123:8123
       - 9181:9181
     volumes:
-      - type: volume
-        source: ch-blue-1-data
-        target: /var/lib/clickhouse
+      - "/clickhousedb-data/clickhouse-blue-1/dataDir:/var/lib/clickhouse"
       - "./configs/gen/clickhouse-blue-1:/etc/clickhouse-server/config.d/"
 
   clickhouse-blue-2:
@@ -33,9 +31,7 @@ services:
       - 8124:8123
       - 9182:9181
     volumes:
-      - type: volume
-        source: ch-blue-2-data
-        target: /var/lib/clickhouse
+      - "/clickhousedb-data/clickhouse-blue-2/dataDir:/var/lib/clickhouse"
       - "./configs/gen/clickhouse-blue-2:/etc/clickhouse-server/config.d/"
 
   clickhouse-green-1:
@@ -47,9 +43,7 @@ services:
       - 8125:8123
       - 9183:9181
     volumes:
-      - type: volume
-        source: ch-green-1-data
-        target: /var/lib/clickhouse
+      - "/clickhousedb-data/clickhouse-green-1/dataDir:/var/lib/clickhouse"
       - "./configs/gen/clickhouse-green-1:/etc/clickhouse-server/config.d/"
 
   clickhouse-green-2:
@@ -61,43 +55,29 @@ services:
       - 8126:8123
       - 9184:9181
     volumes:
-      - type: volume
-        source: ch-green-2-data
-        target: /var/lib/clickhouse
+      - "/clickhousedb-data/clickhouse-green-2/dataDir:/var/lib/clickhouse"
       - "./configs/gen/clickhouse-green-2:/etc/clickhouse-server/config.d/"
 
-  clickhouse-orange-1:
-    <<: *clickhouse-defaults
-    container_name: clickhouse-orange-1
-    hostname: clickhouse-orange-1
-    ports:
-      - 9004:9000
-      - 8127:8123
-      - 9185:9181
-    volumes:
-      - type: volume
-        source: ch-orange-1-data
-        target: /var/lib/clickhouse
-      - "./configs/gen/clickhouse-orange-1:/etc/clickhouse-server/config.d/"
+  # clickhouse-orange-1:
+  #   <<: *clickhouse-defaults
+  #   container_name: clickhouse-orange-1
+  #   hostname: clickhouse-orange-1
+  #   ports:
+  #     - 9004:9000
+  #     - 8127:8123
+  #     - 9185:9181
+  #   volumes:
+  #     - "/clickhousedb-data/clickhouse-orange-1/dataDir:/var/lib/clickhouse"
+  #     - "./configs/gen/clickhouse-orange-1:/etc/clickhouse-server/config.d/"
 
-  clickhouse-orange-2:
-    <<: *clickhouse-defaults
-    container_name: clickhouse-orange-2
-    hostname: clickhouse-orange-2
-    ports:
-      - 9005:9000
-      - 8128:8123
-      - 9186:9181
-    volumes:
-      - type: volume
-        source: ch-orange-2-data
-        target: /var/lib/clickhouse
-      - "./configs/gen/clickhouse-orange-2:/etc/clickhouse-server/config.d/"
-
-volumes:
-  ch-blue-1-data:
-  ch-blue-2-data:
-  ch-green-1-data:
-  ch-green-2-data:
-  ch-orange-1-data:
-  ch-orange-2-data:
+  # clickhouse-orange-2:
+  #   <<: *clickhouse-defaults
+  #   container_name: clickhouse-orange-2
+  #   hostname: clickhouse-orange-2
+  #   ports:
+  #     - 9005:9000
+  #     - 8128:8123
+  #     - 9186:9181
+  #   volumes:
+  #     - "/clickhousedb-data/clickhouse-orange-2/dataDir:/var/lib/clickhouse"
+  #     - "./configs/gen/clickhouse-orange-2:/etc/clickhouse-server/config.d/"

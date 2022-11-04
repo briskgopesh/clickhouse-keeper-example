@@ -26,11 +26,11 @@ gen-clickhouse-config:
 	REPLICA=r2 SHARD=green envsubst < ${BASE_CONFIG_DIR}/macros.xml > ${GEN_CONFIG_DIR}/clickhouse-green-2/macros.xml
 	cp ${BASE_CONFIG_DIR}/remote_servers.xml ${BASE_CONFIG_DIR}/use_keeper.xml ${BASE_CONFIG_DIR}/docker_related_config.xml ${GEN_CONFIG_DIR}/clickhouse-green-2/
 
-	REPLICA=r1 SHARD=orange envsubst < ${BASE_CONFIG_DIR}/macros.xml > ${GEN_CONFIG_DIR}/clickhouse-orange-1/macros.xml
-	cp ${BASE_CONFIG_DIR}/remote_servers.xml ${BASE_CONFIG_DIR}/use_keeper.xml ${BASE_CONFIG_DIR}/docker_related_config.xml ${GEN_CONFIG_DIR}/clickhouse-orange-1/
+# 	REPLICA=r1 SHARD=orange envsubst < ${BASE_CONFIG_DIR}/macros.xml > ${GEN_CONFIG_DIR}/clickhouse-orange-1/macros.xml
+# 	cp ${BASE_CONFIG_DIR}/remote_servers.xml ${BASE_CONFIG_DIR}/use_keeper.xml ${BASE_CONFIG_DIR}/docker_related_config.xml ${GEN_CONFIG_DIR}/clickhouse-orange-1/
 
-	REPLICA=r2 SHARD=orange envsubst < ${BASE_CONFIG_DIR}/macros.xml > ${GEN_CONFIG_DIR}/clickhouse-orange-2/macros.xml
-	cp ${BASE_CONFIG_DIR}/remote_servers.xml ${BASE_CONFIG_DIR}/use_keeper.xml ${BASE_CONFIG_DIR}/docker_related_config.xml ${GEN_CONFIG_DIR}/clickhouse-orange-2/
+# 	REPLICA=r2 SHARD=orange envsubst < ${BASE_CONFIG_DIR}/macros.xml > ${GEN_CONFIG_DIR}/clickhouse-orange-2/macros.xml
+# 	cp ${BASE_CONFIG_DIR}/remote_servers.xml ${BASE_CONFIG_DIR}/use_keeper.xml ${BASE_CONFIG_DIR}/docker_related_config.xml ${GEN_CONFIG_DIR}/clickhouse-orange-2/
 
 .PHONY: up
 up:
