@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en" prefix="og: https://ogp.me/ns#">
+
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="Ramblings on tech, cycling, and finance" />
+<meta name="keywords" content="mrkaran, karan, karan sharma" />
+
+<title>Karan Sharma | Using ClickHouse Keeper for Replication</title>
+<meta
+  property="og:title"
+  content="Karan Sharma | Using ClickHouse Keeper for Replication"
+/>
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://mrkaran.dev/posts/clickhouse-replication/" />
+<meta property="og:description" content="Setting up a multi-shard replicated ClickHouse cluster using ClickHouse Keeper. This setup allows you to setup ClickHouse cluster replication without Zookeeper." />
+<meta property="og:image" content="https://mrkaran.dev/images/clickhouse-cluster.png" />
+<meta property="og:image:url" content="https://mrkaran.dev/images/clickhouse-cluster.png" />
+<meta property="og:image:secure_url" content="https://mrkaran.dev/images/clickhouse-cluster.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Using ClickHouse Keeper for Replication" />
+<meta name="twitter:description" content="Setting up a multi-shard replicated ClickHouse cluster using ClickHouse Keeper. This setup allows you to setup ClickHouse cluster replication without Zookeeper." />
+<meta property="twitter:image" content="https://mrkaran.dev/images/clickhouse-cluster.png" />
+
+
+    <link rel="alternate" type="application/rss+xml" title="Karan Sharma" href="https://mrkaran.dev/atom.xml">
+    
+
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">  -->
+    <link href="https://fonts.googleapis.com/css2?family=Andada+Pro&display=swap&family=Playfair+Display" rel="stylesheet"> 
+
+    <link rel="stylesheet" href="../../css/base.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/feather-icons/4.28.0/feather.min.js"
+        integrity="sha512-7x3zila4t2qNycrtZ31HO0NnJr8kg2VI67YLoRSyi9hGhRN66FHYWr7Axa9Y1J9tGYHVBPqIjSE1ogHrJTz51g=="
+        crossorigin="anonymous"></script>
+</head>
+
+<body>
+    <header>
+        <a class="site-name" href="https://mrkaran.dev/">
+            <h1>Karan Sharma</h1>
+        </a>
+        <div class="site-description">
+            <p>Ramblings on tech, cycling, and finance</p>
+            <!-- <div class="search-container">
+                <span class="search-icon"><i data-feather="search"></i></span>
+                <input id="search" type="search" placeholder="Search">
+                <div class="search-results">
+                    <div class="search-results__items"></div>
+                </div>
+            </div> -->
+        </div>
+        <nav>
+            <div class="links">
+                
+                
+                <a 
+                    href="https://mrkaran.dev/ ">Home
+                </a>
+                
+                
+                <a 
+                    href="https://mrkaran.dev/posts/ ">Blog
+                </a>
+                
+                
+                <a 
+                    href="https://notes.mrkaran.dev ">Notes
+                </a>
+                
+                
+                <a 
+                    href="https://mrkaran.dev/tags/ ">Tags
+                </a>
+                
+                
+                <a 
+                    href="https://mrkaran.dev/projects/ ">Projects
+                </a>
+                
+                
+                <a 
+                    href="https://mrkaran.dev/talks/ ">Talks
+                </a>
+                
+                
+                <a 
+                    href="https://mrkaran.dev/setup/ ">Setup
+                </a>
+                
+                
+                <a 
+                    href="https://mrkaran.dev/causes/ ">Causes
+                </a>
+                
+                
+                <a 
+                    href="https://mrkaran.dev/contact/ ">Contact
+                </a>
+                
+            </div>
+        </nav>
+    </header>
+    <article>
+
+<section class="post">
+  <div class="post-header">
+    <div class="meta">
+      <div class="date">
+        <span class="day">17</span>
+        <span class="rest">Dec 21</span>
+      </div>
+    </div>
+
+    <div class="matter">
+      <h1 class="title">Using ClickHouse Keeper for Replication</h1>
+    </div>
+  </div>
+  <article><p>ClickHouse is an extremely performant columnar DB used for fast analytical processing. ClickHouse supports data <a href="https://clickhouse.com/docs/en/engines/table-engines/mergetree-family/replication/">replication</a> using Apache Zookeeper which needs to be deployed externally. While Zookeeper works well after you've tuned it properly, it was still an additional maintenance overhead. The good news is that you don't have to worry about this anymore.</p>
+<p>ClickHouse 21.12 <a href="https://clickhouse.com/blog/en/2021/clickhouse-v21.12-released/">release annoucement</a> mentions <code>ClickHouse Keeper</code> as feature complete. <a href="https://clickhouse.com/docs/en/operations/clickhouse-keeper/">Keeper</a> is a replacement for Zookeeper, written in C++ and uses the RAFT algorithm for consensus across different nodes in the cluster. It also has some nice improvements over Zookeeper, such as compressed snapshots/logs of the state changes in the cluster and the ability to run it <em>inside</em> the server binary itself. I decided to spin up a local Clickhouse cluster and test out the new <code>clickhouse-keeper</code> feature.</p>
+<p>For our local setup, we'll set up <strong>4 nodes</strong>. We'll create <strong>2 shards</strong> to distribute our data and each shard will have <strong>2 replicas each</strong>. The setup looks something like this:</p>
+<p><img src="../../images/clickhouse-cluster.png" alt="image" /></p>
+<p>We need to run <code>clickhouse-keeper</code> only on 3 of these nodes to ensure a quorum. Here's a sample <code>docker-compose.yml</code> to spin up these nodes as containers:</p>
+<pre data-lang="yml" style="background-color:#151515;color:#e8e8d3;" class="language-yml "><code class="language-yml" data-lang="yml"><span style="color:#ffb964;">version</span><span>: </span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">3.7</span><span style="color:#556633;">&quot;
+</span><span>
+</span><span style="color:#ffb964;">x-clickhouse-defaults</span><span>: </span><span style="color:#8fbfdc;">&amp;</span><span style="color:#ffb964;">clickhouse-defaults
+</span><span>  </span><span style="color:#ffb964;">restart</span><span>: </span><span style="color:#99ad6a;">unless-stopped
+</span><span>  </span><span style="color:#ffb964;">image</span><span>: </span><span style="color:#99ad6a;">yandex/clickhouse-server:21.12.2.17
+</span><span>  </span><span style="color:#ffb964;">ulimits</span><span>:
+</span><span>    </span><span style="color:#ffb964;">nproc</span><span>: </span><span style="color:#cf6a4c;">65535
+</span><span>    </span><span style="color:#ffb964;">nofile</span><span>:
+</span><span>      </span><span style="color:#ffb964;">soft</span><span>: </span><span style="color:#cf6a4c;">262144
+</span><span>      </span><span style="color:#ffb964;">hard</span><span>: </span><span style="color:#cf6a4c;">262144
+</span><span>
+</span><span style="color:#ffb964;">services</span><span>:
+</span><span>  </span><span style="color:#ffb964;">clickhouse-blue-1</span><span>:
+</span><span>    &lt;&lt;: </span><span style="color:#8fbfdc;">*</span><span style="color:#ffb964;">clickhouse-defaults
+</span><span>    </span><span style="color:#ffb964;">container_name</span><span>: </span><span style="color:#99ad6a;">clickhouse-blue-1
+</span><span>    </span><span style="color:#ffb964;">hostname</span><span>: </span><span style="color:#99ad6a;">clickhouse-blue-1
+</span><span>    </span><span style="color:#ffb964;">ports</span><span>:
+</span><span>      - </span><span style="color:#99ad6a;">9000:9000
+</span><span>      - </span><span style="color:#99ad6a;">8123:8123
+</span><span>      - </span><span style="color:#99ad6a;">9181:9181
+</span><span>    </span><span style="color:#ffb964;">volumes</span><span>:
+</span><span>      - </span><span style="color:#ffb964;">type</span><span>: </span><span style="color:#99ad6a;">volume
+</span><span>        </span><span style="color:#ffb964;">source</span><span>: </span><span style="color:#99ad6a;">ch-blue-1-data
+</span><span>        </span><span style="color:#ffb964;">target</span><span>: </span><span style="color:#99ad6a;">/var/lib/clickhouse
+</span><span>      - </span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">./configs/gen/clickhouse-blue-1:/etc/clickhouse-server/config.d/</span><span style="color:#556633;">&quot;
+</span><span>
+</span><span>  </span><span style="color:#ffb964;">clickhouse-blue-2</span><span>:
+</span><span>    &lt;&lt;: </span><span style="color:#8fbfdc;">*</span><span style="color:#ffb964;">clickhouse-defaults
+</span><span>    </span><span style="color:#ffb964;">container_name</span><span>: </span><span style="color:#99ad6a;">clickhouse-blue-2
+</span><span>    </span><span style="color:#ffb964;">hostname</span><span>: </span><span style="color:#99ad6a;">clickhouse-blue-2
+</span><span>    </span><span style="color:#ffb964;">ports</span><span>:
+</span><span>      - </span><span style="color:#99ad6a;">9001:9000
+</span><span>      - </span><span style="color:#99ad6a;">8124:8123
+</span><span>      - </span><span style="color:#99ad6a;">9182:9181
+</span><span>    </span><span style="color:#ffb964;">volumes</span><span>:
+</span><span>      - </span><span style="color:#ffb964;">type</span><span>: </span><span style="color:#99ad6a;">volume
+</span><span>        </span><span style="color:#ffb964;">source</span><span>: </span><span style="color:#99ad6a;">ch-blue-2-data
+</span><span>        </span><span style="color:#ffb964;">target</span><span>: </span><span style="color:#99ad6a;">/var/lib/clickhouse
+</span><span>      - </span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">./configs/gen/clickhouse-blue-2:/etc/clickhouse-server/config.d/</span><span style="color:#556633;">&quot;
+</span><span>
+</span><span>  </span><span style="color:#ffb964;">clickhouse-green-1</span><span>:
+</span><span>    &lt;&lt;: </span><span style="color:#8fbfdc;">*</span><span style="color:#ffb964;">clickhouse-defaults
+</span><span>    </span><span style="color:#ffb964;">container_name</span><span>: </span><span style="color:#99ad6a;">clickhouse-green-1
+</span><span>    </span><span style="color:#ffb964;">hostname</span><span>: </span><span style="color:#99ad6a;">clickhouse-green-1
+</span><span>    </span><span style="color:#ffb964;">ports</span><span>:
+</span><span>      - </span><span style="color:#99ad6a;">9002:9000
+</span><span>      - </span><span style="color:#99ad6a;">8125:8123
+</span><span>      - </span><span style="color:#99ad6a;">9183:9181
+</span><span>    </span><span style="color:#ffb964;">volumes</span><span>:
+</span><span>      - </span><span style="color:#ffb964;">type</span><span>: </span><span style="color:#99ad6a;">volume
+</span><span>        </span><span style="color:#ffb964;">source</span><span>: </span><span style="color:#99ad6a;">ch-green-1-data
+</span><span>        </span><span style="color:#ffb964;">target</span><span>: </span><span style="color:#99ad6a;">/var/lib/clickhouse
+</span><span>      - </span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">./configs/gen/clickhouse-green-1:/etc/clickhouse-server/config.d/</span><span style="color:#556633;">&quot;
+</span><span>
+</span><span>  </span><span style="color:#ffb964;">clickhouse-green-2</span><span>:
+</span><span>    &lt;&lt;: </span><span style="color:#8fbfdc;">*</span><span style="color:#ffb964;">clickhouse-defaults
+</span><span>    </span><span style="color:#ffb964;">container_name</span><span>: </span><span style="color:#99ad6a;">clickhouse-green-2
+</span><span>    </span><span style="color:#ffb964;">hostname</span><span>: </span><span style="color:#99ad6a;">clickhouse-green-2
+</span><span>    </span><span style="color:#ffb964;">ports</span><span>:
+</span><span>      - </span><span style="color:#99ad6a;">9003:9000
+</span><span>      - </span><span style="color:#99ad6a;">8126:8123
+</span><span>      - </span><span style="color:#99ad6a;">9184:9181
+</span><span>    </span><span style="color:#ffb964;">volumes</span><span>:
+</span><span>      - </span><span style="color:#ffb964;">type</span><span>: </span><span style="color:#99ad6a;">volume
+</span><span>        </span><span style="color:#ffb964;">source</span><span>: </span><span style="color:#99ad6a;">ch-green-2-data
+</span><span>        </span><span style="color:#ffb964;">target</span><span>: </span><span style="color:#99ad6a;">/var/lib/clickhouse
+</span><span>      - </span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">./configs/gen/clickhouse-green-2:/etc/clickhouse-server/config.d/</span><span style="color:#556633;">&quot;
+</span><span>
+</span><span style="color:#ffb964;">volumes</span><span>:
+</span><span>  </span><span style="color:#ffb964;">ch-blue-1-data</span><span>:
+</span><span>  </span><span style="color:#ffb964;">ch-blue-2-data</span><span>:
+</span><span>  </span><span style="color:#ffb964;">ch-green-1-data</span><span>:
+</span><span>  </span><span style="color:#ffb964;">ch-green-2-data</span><span>:
+</span></code></pre>
+<p><code>clickhouse-keeper</code> runs only if the <code>&lt;keeper_config&gt;</code> section is present inside the config. Here's a sample config:</p>
+<pre data-lang="xml" style="background-color:#151515;color:#e8e8d3;" class="language-xml "><code class="language-xml" data-lang="xml"><span>&lt;</span><span style="color:#ffb964;">clickhouse</span><span>&gt;
+</span><span>    &lt;</span><span style="color:#ffb964;">keeper_server</span><span>&gt;
+</span><span>        &lt;</span><span style="color:#ffb964;">tcp_port</span><span>&gt;9181&lt;/</span><span style="color:#ffb964;">tcp_port</span><span>&gt;
+</span><span>        &lt;</span><span style="color:#ffb964;">server_id</span><span>&gt;${SERVER_ID}&lt;/</span><span style="color:#ffb964;">server_id</span><span>&gt;
+</span><span>        &lt;</span><span style="color:#ffb964;">log_storage_path</span><span>&gt;/var/lib/clickhouse/coordination/log&lt;/</span><span style="color:#ffb964;">log_storage_path</span><span>&gt;
+</span><span>        &lt;</span><span style="color:#ffb964;">snapshot_storage_path</span><span>&gt;/var/lib/clickhouse/coordination/snapshots&lt;/</span><span style="color:#ffb964;">snapshot_storage_path</span><span>&gt;
+</span><span>
+</span><span>        &lt;</span><span style="color:#ffb964;">coordination_settings</span><span>&gt;
+</span><span>            &lt;</span><span style="color:#ffb964;">operation_timeout_ms</span><span>&gt;10000&lt;/</span><span style="color:#ffb964;">operation_timeout_ms</span><span>&gt;
+</span><span>            &lt;</span><span style="color:#ffb964;">session_timeout_ms</span><span>&gt;30000&lt;/</span><span style="color:#ffb964;">session_timeout_ms</span><span>&gt;
+</span><span>            &lt;</span><span style="color:#ffb964;">raft_logs_level</span><span>&gt;trace&lt;/</span><span style="color:#ffb964;">raft_logs_level</span><span>&gt;
+</span><span>        &lt;/</span><span style="color:#ffb964;">coordination_settings</span><span>&gt;
+</span><span>
+</span><span>        &lt;</span><span style="color:#ffb964;">raft_configuration</span><span>&gt;
+</span><span>            &lt;</span><span style="color:#ffb964;">server</span><span>&gt;
+</span><span>                &lt;</span><span style="color:#ffb964;">id</span><span>&gt;1&lt;/</span><span style="color:#ffb964;">id</span><span>&gt;
+</span><span>                &lt;</span><span style="color:#ffb964;">hostname</span><span>&gt;clickhouse-blue-1&lt;/</span><span style="color:#ffb964;">hostname</span><span>&gt;
+</span><span>                &lt;</span><span style="color:#ffb964;">port</span><span>&gt;9234&lt;/</span><span style="color:#ffb964;">port</span><span>&gt;
+</span><span>            &lt;/</span><span style="color:#ffb964;">server</span><span>&gt;
+</span><span>            &lt;</span><span style="color:#ffb964;">server</span><span>&gt;
+</span><span>                &lt;</span><span style="color:#ffb964;">id</span><span>&gt;2&lt;/</span><span style="color:#ffb964;">id</span><span>&gt;
+</span><span>                &lt;</span><span style="color:#ffb964;">hostname</span><span>&gt;clickhouse-blue-2&lt;/</span><span style="color:#ffb964;">hostname</span><span>&gt;
+</span><span>                &lt;</span><span style="color:#ffb964;">port</span><span>&gt;9234&lt;/</span><span style="color:#ffb964;">port</span><span>&gt;
+</span><span>            &lt;/</span><span style="color:#ffb964;">server</span><span>&gt;
+</span><span>            &lt;</span><span style="color:#ffb964;">server</span><span>&gt;
+</span><span>                &lt;</span><span style="color:#ffb964;">id</span><span>&gt;3&lt;/</span><span style="color:#ffb964;">id</span><span>&gt;
+</span><span>                &lt;</span><span style="color:#ffb964;">hostname</span><span>&gt;clickhouse-green-1&lt;/</span><span style="color:#ffb964;">hostname</span><span>&gt;
+</span><span>                &lt;</span><span style="color:#ffb964;">port</span><span>&gt;9234&lt;/</span><span style="color:#ffb964;">port</span><span>&gt;
+</span><span>            &lt;/</span><span style="color:#ffb964;">server</span><span>&gt;
+</span><span>        &lt;/</span><span style="color:#ffb964;">raft_configuration</span><span>&gt;
+</span><span>    &lt;/</span><span style="color:#ffb964;">keeper_server</span><span>&gt;
+</span><span>&lt;/</span><span style="color:#ffb964;">clickhouse</span><span>&gt;
+</span></code></pre>
+<p>There are some other configs required for Clickhouse to discover other nodes and enable replication. You can find a working example in this <a href="https://github.com/mr-karan/clickhouse-keeper-example">repo</a>.</p>
+<h2 id="verifying-cluster-state">Verifying Cluster State</h2>
+<p>Once the containers are configured and running, we can verify if the replication is working as intended:</p>
+<p>Let's first check if the <code>keeper</code> daemon is running by:</p>
+<pre data-lang="bash" style="background-color:#151515;color:#e8e8d3;" class="language-bash "><code class="language-bash" data-lang="bash"><span>echo ruok | </span><span style="color:#ffb964;">nc</span><span> 127.0.0.1 9181
+</span><span style="color:#ffb964;">imok
+</span></code></pre>
+<p><code>ruok</code> is a part of <a href="https://clickhouse.com/docs/en/operations/clickhouse-keeper/#four-letter-word-commands">Four Letter Commands</a> that are mostly used to diagnose Keeper's client/server.</p>
+<p>To ensure that <code>clickhouse-server</code> is aware of the <code>keeper</code> cluster, we can query the <code>system.zookeeper</code> table:</p>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>SELECT </span><span style="color:#ffb964;">*
+</span><span>FROM </span><span style="color:#7697d6;">system</span><span>.</span><span style="color:#7697d6;">zookeeper
+</span><span>WHERE </span><span style="color:#8fbfdc;">path </span><span>= </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">/</span><span style="color:#556633;">&#39;
+</span><span>FORMAT Vertical
+</span><span>
+</span><span>Query id: 287d3c2d-b93f-4d48-b335-6df2f89a8ab3
+</span><span>
+</span><span>Row </span><span style="color:#cf6a4c;">1</span><span>:
+</span><span>──────
+</span><span>name:           clickhouse
+</span><span>value:          
+</span><span>czxid:          </span><span style="color:#cf6a4c;">3
+</span><span>mzxid:          </span><span style="color:#cf6a4c;">3
+</span><span>ctime:          </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">11</span><span>:</span><span style="color:#cf6a4c;">05
+</span><span>mtime:          </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">11</span><span>:</span><span style="color:#cf6a4c;">05
+</span><span>version:        </span><span style="color:#cf6a4c;">0
+</span><span>cversion:       </span><span style="color:#cf6a4c;">1
+</span><span>aversion:       </span><span style="color:#cf6a4c;">0
+</span><span>ephemeralOwner: </span><span style="color:#cf6a4c;">0
+</span><span>dataLength:     </span><span style="color:#cf6a4c;">0
+</span><span>numChildren:    </span><span style="color:#cf6a4c;">1
+</span><span>pzxid:          </span><span style="color:#cf6a4c;">4
+</span><span style="color:#8fbfdc;">path</span><span>:           /
+</span></code></pre>
+<p>If you don't see any results in the <code>system.zookeeper</code> table, then re-check if <code>zookeeper</code> section is present inside the config. This config tells ClickHouse how to discover keeper nodes.</p>
+<p>We can also see if our cluster is configured correctly with:</p>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>SELECT
+</span><span>    host_name,
+</span><span>    host_address,
+</span><span>    replica_num
+</span><span>FROM </span><span style="color:#7697d6;">system</span><span>.</span><span style="color:#7697d6;">clusters
+</span><span>WHERE cluster = </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">events</span><span style="color:#556633;">&#39;
+</span><span>
+</span><span>Query id: a4bacfa1-d3aa-482f-b8b2-30b05442a173
+</span><span>
+</span><span>┌─host_name──────────┬─host_address─┬─replica_num─┐
+</span><span>│ clickhouse-blue-</span><span style="color:#cf6a4c;">1</span><span>  │ </span><span style="color:#cf6a4c;">172</span><span>.</span><span style="color:#cf6a4c;">19</span><span>.</span><span style="color:#cf6a4c;">0</span><span>.</span><span style="color:#cf6a4c;">5</span><span>   │           </span><span style="color:#cf6a4c;">1</span><span> │
+</span><span>│ clickhouse-blue-</span><span style="color:#cf6a4c;">2</span><span>  │ </span><span style="color:#cf6a4c;">172</span><span>.</span><span style="color:#cf6a4c;">19</span><span>.</span><span style="color:#cf6a4c;">0</span><span>.</span><span style="color:#cf6a4c;">3</span><span>   │           </span><span style="color:#cf6a4c;">2</span><span> │
+</span><span>│ clickhouse-green-</span><span style="color:#cf6a4c;">1</span><span> │ </span><span style="color:#cf6a4c;">172</span><span>.</span><span style="color:#cf6a4c;">19</span><span>.</span><span style="color:#cf6a4c;">0</span><span>.</span><span style="color:#cf6a4c;">4</span><span>   │           </span><span style="color:#cf6a4c;">1</span><span> │
+</span><span>│ clickhouse-green-</span><span style="color:#cf6a4c;">2</span><span> │ </span><span style="color:#cf6a4c;">172</span><span>.</span><span style="color:#cf6a4c;">19</span><span>.</span><span style="color:#cf6a4c;">0</span><span>.</span><span style="color:#cf6a4c;">2</span><span>   │           </span><span style="color:#cf6a4c;">2</span><span> │
+</span><span>└────────────────────┴──────────────┴─────────────┘
+</span></code></pre>
+<p>(Here <code>events</code> is our cluster name specified in the <code>remote_servers</code> section of the config.)</p>
+<h2 id="inserting-sample-data">Inserting Sample Data</h2>
+<p>Let's create a DB and add some data to the DB. We need to ensure that our data is split across shards and we can query all shards using a central <em>view</em>.</p>
+<h3 id="cluster-schema">Cluster Schema</h3>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>CREATE DATABASE app ON CLUSTER &#39;</span><span style="color:#fad07a;">events</span><span>&#39;;
+</span><span>
+</span><span>CREATE TABLE app.events_local ON CLUSTER &#39;</span><span style="color:#fad07a;">{cluster}</span><span>&#39; (
+</span><span>    </span><span style="color:#8fbfdc;">time DateTime</span><span>,
+</span><span>    event_id  Int32,
+</span><span>    uuid UUID
+</span><span>)
+</span><span>ENGINE = ReplicatedMergeTree(</span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">/clickhouse/tables/{cluster}/{shard}/{table}</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">{replica}</span><span style="color:#556633;">&#39;</span><span>)
+</span><span>PARTITION BY toYYYYMM(</span><span style="color:#8fbfdc;">time</span><span>)
+</span><span>ORDER BY (event_id);
+</span><span>
+</span><span>CREATE TABLE app.events_main ON CLUSTER &#39;{cluster}</span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;"> AS app.events_local
+</span><span style="color:#99ad6a;">ENGINE = Distributed(</span><span style="color:#556633;">&#39;</span><span>{cluster}</span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">, app, events_local, rand());
+</span></code></pre>
+<p>What's happening here:</p>
+<ol>
+<li>We'll create a sample database <code>app</code> with a single table <code>events_local</code>.</li>
+<li>We're using <code>ReplicatedMergeTree</code> here as that tells <code>ClickHouse</code> to automatically replicate the data inside the table when it's inserted.
+<ul>
+<li>Properties like <code>cluster</code>/<code>shard</code>/<code>replica</code> are automatically populated from the server's <em>macros</em>. It's a handy feature that allows you to execute this command just <em>once</em> on the cluster and it automatically populates the relevant config in each server.</li>
+</ul>
+</li>
+<li>Finally we create a  <code>Distributed</code> table to perform our <code>INSERT</code>/<code>SELECT</code> operations in a central place. It's possible to manually insert data to particular replicas, but since Clickhouse supports load balancing across shards, it's preferred to create a table with a <code>Distributed</code> engine and let that happen automatically.
+<ul>
+<li>Write operations can be sharded based on a particular column name, but here we are simply using the <code>rand()</code> function, which splits the write randomly to different shards.</li>
+<li>All read operations are parallelized and Clickhouse selects one replica from each shard to query the data from. </li>
+</ul>
+</li>
+<li>We use <code>ON CLUSTER</code> keyword to indicate that this query has to be run on all servers which are part of the cluster <code>events</code>.</li>
+</ol>
+<p>It's now time to insert some random data, for which you can use this command:</p>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>INSERT INTO </span><span style="color:#7697d6;">app</span><span>.</span><span style="color:#7697d6;">events_main </span><span>VALUES (now(), rand(</span><span style="color:#cf6a4c;">1</span><span>), generateUUIDv4());
+</span></code></pre>
+<p>We can now query the table and see if our records are present:</p>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>SELECT </span><span style="color:#ffb964;">*
+</span><span>FROM </span><span style="color:#7697d6;">app</span><span>.</span><span style="color:#7697d6;">events_main
+</span><span>
+</span><span>┌────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬───event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">17</span><span> │ </span><span style="color:#cf6a4c;">1888949839</span><span> │ 3c33305e-8ea0-4ac1-a07a-667465ec9a85 │
+</span><span>└─────────────────────┴────────────┴──────────────────────────────────────┘
+</span><span>┌────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬───event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">16</span><span> │ -</span><span style="color:#cf6a4c;">689113926</span><span> │ 2a944d71-73f3-</span><span style="color:#cf6a4c;">4491</span><span>-b851-4f0e6f296e44 │
+</span><span>└─────────────────────┴────────────┴──────────────────────────────────────┘
+</span><span>┌────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬──event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">15</span><span> │ </span><span style="color:#cf6a4c;">415899002</span><span> │ 5980299f-</span><span style="color:#cf6a4c;">1594</span><span>-4c17-8eb5-e512f15ecf34 │
+</span><span>└─────────────────────┴───────────┴──────────────────────────────────────┘
+</span><span>┌────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬───event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">16</span><span> │ </span><span style="color:#cf6a4c;">1303963476</span><span> │ 0b27d5bd-</span><span style="color:#cf6a4c;">6315</span><span>-</span><span style="color:#cf6a4c;">4937</span><span>-82a4-18199e5eebb7 │
+</span><span>└─────────────────────┴────────────┴──────────────────────────────────────┘
+</span></code></pre>
+<p>Now, you must be wondering how to check if the data is replicated and how the data is distributed across our shards. For that, we can use the handy <code>remote()</code> function:</p>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>SELECT </span><span style="color:#ffb964;">*
+</span><span>FROM
+</span><span>(
+</span><span>    SELECT
+</span><span>        hostName(),
+</span><span>        </span><span style="color:#ffb964;">*
+</span><span>    FROM remote(</span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">172.20.0.2</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">app</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">events_local</span><span style="color:#556633;">&#39;</span><span>)
+</span><span>    UNION ALL
+</span><span>    SELECT
+</span><span>        hostName(),
+</span><span>        </span><span style="color:#ffb964;">*
+</span><span>    FROM remote(</span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">172.20.0.3</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">app</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">events_local</span><span style="color:#556633;">&#39;</span><span>)
+</span><span>    UNION ALL
+</span><span>    SELECT
+</span><span>        hostName(),
+</span><span>        </span><span style="color:#ffb964;">*
+</span><span>    FROM remote(</span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">172.20.0.4</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">app</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">events_local</span><span style="color:#556633;">&#39;</span><span>)
+</span><span>    UNION ALL
+</span><span>    SELECT
+</span><span>        hostName(),
+</span><span>        </span><span style="color:#ffb964;">*
+</span><span>    FROM remote(</span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">172.20.0.5</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">app</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">events_local</span><span style="color:#556633;">&#39;</span><span>)
+</span><span>)
+</span><span>
+</span><span>Query id: 34a81447-a31b-</span><span style="color:#cf6a4c;">4915</span><span>-9bd8-7a6e17bb0860
+</span><span>
+</span><span>┌─hostName()────────┬────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬───event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ clickhouse-blue-</span><span style="color:#cf6a4c;">2</span><span> │ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">17</span><span> │ </span><span style="color:#cf6a4c;">1888949839</span><span> │ 3c33305e-8ea0-4ac1-a07a-667465ec9a85 │
+</span><span>└───────────────────┴─────────────────────┴────────────┴──────────────────────────────────────┘
+</span><span>┌─hostName()────────┬────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬───event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ clickhouse-blue-</span><span style="color:#cf6a4c;">1</span><span> │ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">17</span><span> │ </span><span style="color:#cf6a4c;">1888949839</span><span> │ 3c33305e-8ea0-4ac1-a07a-667465ec9a85 │
+</span><span>└───────────────────┴─────────────────────┴────────────┴──────────────────────────────────────┘
+</span><span>┌─hostName()─────────┬────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬──event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ clickhouse-green-</span><span style="color:#cf6a4c;">2</span><span> │ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">15</span><span> │ </span><span style="color:#cf6a4c;">415899002</span><span> │ 5980299f-</span><span style="color:#cf6a4c;">1594</span><span>-4c17-8eb5-e512f15ecf34 │
+</span><span>└────────────────────┴─────────────────────┴───────────┴──────────────────────────────────────┘
+</span><span>┌─hostName()─────────┬────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬───event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ clickhouse-green-</span><span style="color:#cf6a4c;">2</span><span> │ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">16</span><span> │ -</span><span style="color:#cf6a4c;">689113926</span><span> │ 2a944d71-73f3-</span><span style="color:#cf6a4c;">4491</span><span>-b851-4f0e6f296e44 │
+</span><span>└────────────────────┴─────────────────────┴────────────┴──────────────────────────────────────┘
+</span><span>┌─hostName()─────────┬────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬───event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ clickhouse-green-</span><span style="color:#cf6a4c;">2</span><span> │ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">16</span><span> │ </span><span style="color:#cf6a4c;">1303963476</span><span> │ 0b27d5bd-</span><span style="color:#cf6a4c;">6315</span><span>-</span><span style="color:#cf6a4c;">4937</span><span>-82a4-18199e5eebb7 │
+</span><span>└────────────────────┴─────────────────────┴────────────┴──────────────────────────────────────┘
+</span><span>┌─hostName()─────────┬────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬───event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ clickhouse-green-</span><span style="color:#cf6a4c;">1</span><span> │ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">16</span><span> │ </span><span style="color:#cf6a4c;">1303963476</span><span> │ 0b27d5bd-</span><span style="color:#cf6a4c;">6315</span><span>-</span><span style="color:#cf6a4c;">4937</span><span>-82a4-18199e5eebb7 │
+</span><span>└────────────────────┴─────────────────────┴────────────┴──────────────────────────────────────┘
+</span><span>┌─hostName()─────────┬────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬──event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ clickhouse-green-</span><span style="color:#cf6a4c;">1</span><span> │ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">15</span><span> │ </span><span style="color:#cf6a4c;">415899002</span><span> │ 5980299f-</span><span style="color:#cf6a4c;">1594</span><span>-4c17-8eb5-e512f15ecf34 │
+</span><span>└────────────────────┴─────────────────────┴───────────┴──────────────────────────────────────┘
+</span><span>┌─hostName()─────────┬────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬───event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ clickhouse-green-</span><span style="color:#cf6a4c;">1</span><span> │ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 09</span><span>:</span><span style="color:#cf6a4c;">36</span><span>:</span><span style="color:#cf6a4c;">16</span><span> │ -</span><span style="color:#cf6a4c;">689113926</span><span> │ 2a944d71-73f3-</span><span style="color:#cf6a4c;">4491</span><span>-b851-4f0e6f296e44 │
+</span><span>└────────────────────┴─────────────────────┴────────────┴──────────────────────────────────────┘
+</span></code></pre>
+<p>Perfect! We can see our data is sharded as some parts of it exists in <code>green</code> and <code>blue</code>. We can also see that for each record, we have 2 entries thus confirming that <code>ReplicatedMergeTree</code> is doing its job!</p>
+<h2 id="additional-scenarios">Additional Scenarios</h2>
+<p>All is well and good so far, but to ensure that our cluster setup is resilient we need to introduce our cluster to some <em>Non-Happy</em> scenarios.</p>
+<h3 id="stop-a-replica-node">Stop a replica node</h3>
+<p><img src="../../images/clickhouse-cluster-replica-down.png" alt="image" /></p>
+<pre style="background-color:#151515;color:#e8e8d3;"><code><span>❯ docker-compose stop clickhouse-green-2 
+</span><span>Stopping clickhouse-green-2 ... done
+</span></code></pre>
+<p>Now, let's query our records:</p>
+<pre style="background-color:#151515;color:#e8e8d3;"><code><span>SELECT count(*)
+</span><span>FROM app.events_main
+</span><span>
+</span><span>┌─count()─┐
+</span><span>│       4 │
+</span><span>└─────────┘
+</span></code></pre>
+<p>That seems right. We're able to access all our data with just one replica down. </p>
+<p>Let's try inserting data and bring back the replica to see if it got automatically replicated or not:</p>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>INSERT INTO </span><span style="color:#7697d6;">app</span><span>.</span><span style="color:#7697d6;">events_main </span><span>VALUES (now(), rand(</span><span style="color:#cf6a4c;">1</span><span>), generateUUIDv4());
+</span><span>
+</span><span>Ok.
+</span></code></pre>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>SELECT </span><span style="color:#ffb964;">*
+</span><span>FROM </span><span style="color:#7697d6;">app</span><span>.</span><span style="color:#7697d6;">events_main
+</span><span>ORDER BY </span><span style="color:#8fbfdc;">time </span><span>DESC
+</span><span>LIMIT </span><span style="color:#cf6a4c;">1
+</span><span>
+</span><span>┌────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬──event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 10</span><span>:</span><span style="color:#cf6a4c;">09</span><span>:</span><span style="color:#cf6a4c;">10</span><span> │ </span><span style="color:#cf6a4c;">375826335</span><span> │ 8dbbc9cf-8f00-4cc3-a4fb-0f17a68340e5 │
+</span><span>└─────────────────────┴───────────┴──────────────────────────────────────┘
+</span></code></pre>
+<p>Let's start the replica again:</p>
+<pre style="background-color:#151515;color:#e8e8d3;"><code><span>❯ docker-compose start clickhouse-green-2
+</span><span>Starting clickhouse-green-2 ... done
+</span></code></pre>
+<p>On querying the replica to see if it has the data:</p>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>SELECT
+</span><span>    hostName(),
+</span><span>    </span><span style="color:#ffb964;">*
+</span><span>FROM remote(</span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">172.20.0.5</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">app</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">events_local</span><span style="color:#556633;">&#39;</span><span>)
+</span><span>ORDER BY </span><span style="color:#8fbfdc;">time </span><span>DESC
+</span><span>LIMIT </span><span style="color:#cf6a4c;">1
+</span><span>
+</span><span>Query id: 422041dc-afe8-4f28-</span><span style="color:#cf6a4c;">9659</span><span>-6d58726f8c90
+</span><span>
+</span><span>┌─hostName()─────────┬────────────────</span><span style="color:#8fbfdc;">time</span><span>─┬──event_id─┬─uuid─────────────────────────────────┐
+</span><span>│ clickhouse-green-</span><span style="color:#cf6a4c;">2</span><span> │ </span><span style="color:#cf6a4c;">2021</span><span>-</span><span style="color:#cf6a4c;">12</span><span>-</span><span style="color:#cf6a4c;">17 10</span><span>:</span><span style="color:#cf6a4c;">09</span><span>:</span><span style="color:#cf6a4c;">10</span><span> │ </span><span style="color:#cf6a4c;">375826335</span><span> │ 8dbbc9cf-8f00-4cc3-a4fb-0f17a68340e5 │
+</span><span>└────────────────────┴─────────────────────┴───────────┴──────────────────────────────────────┘
+</span></code></pre>
+<p>Perfect! The record <code>375826335</code> automatically got replicated once the replica was healthy.</p>
+<h3 id="stop-a-keeper-node">Stop a Keeper Node</h3>
+<p><img src="../../images/clickhouse-cluster-keeper-1-down.png" alt="image" /></p>
+<p>We'll stop a server instance that is running the <code>clickhouse-keeper</code> process. By doing this, we'll also be killing a replica, but that is okay.</p>
+<pre style="background-color:#151515;color:#e8e8d3;"><code><span>❯ docker-compose stop clickhouse-blue-2
+</span><span>Stopping clickhouse-blue-2 ... done
+</span></code></pre>
+<p>Let's insert some data:</p>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>INSERT INTO </span><span style="color:#7697d6;">app</span><span>.</span><span style="color:#7697d6;">events_main </span><span>VALUES (now(), rand(</span><span style="color:#cf6a4c;">1</span><span>), generateUUIDv4());
+</span><span>
+</span><span>Ok
+</span></code></pre>
+<p>We can check the server information of the other 2 <code>keeper</code> nodes:</p>
+<pre style="background-color:#151515;color:#e8e8d3;"><code><span>$ echo stat | nc 127.0.0.1 9181 | grep Mode
+</span><span>Mode: follower
+</span><span>$ echo stat | nc 127.0.0.1 9183 | grep Mode
+</span><span>Mode: leader
+</span></code></pre>
+<p>So, one of the <code>keeper</code> nodes has elected itself to be the leader and we have no problems in the setup so far. However, if we stop another <code>keeper</code> node, then there will be only <code>keeper</code> node remaining in the setup and to avoid a <em>Split Brain</em> issue, it won't be able to elect itself as the leader.</p>
+<p><img src="../../images/clickhouse-cluster-keeper-2-down.png" alt="image" /></p>
+<p>What happens then? Only one way to find out:</p>
+<pre data-lang="bash" style="background-color:#151515;color:#e8e8d3;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#ffb964;">❯</span><span> docker-compose stop clickhouse-blue-1
+</span><span style="color:#ffb964;">Stopping</span><span> clickhouse-blue-1 ... done
+</span></code></pre>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>INSERT INTO </span><span style="color:#7697d6;">app</span><span>.</span><span style="color:#7697d6;">events_main </span><span>VALUES (now(), rand(</span><span style="color:#cf6a4c;">1</span><span>), generateUUIDv4());
+</span><span>
+</span><span>Received exception from server (version </span><span style="color:#cf6a4c;">21</span><span>.</span><span style="color:#cf6a4c;">12</span><span>.</span><span style="color:#cf6a4c;">2</span><span>):
+</span><span>Code: </span><span style="color:#cf6a4c;">242</span><span>. DB::Exception: Received from localhost:</span><span style="color:#cf6a4c;">9000</span><span>. DB::Exception: Table is in readonly mode (zookeeper </span><span style="color:#8fbfdc;">path</span><span>: /clickhouse/tables/events/green/table). (TABLE_IS_READ_ONLY)
+</span></code></pre>
+<p>Ah! So, we can still query for the data (which will be incomplete since <em>blue</em> shard is completely down), but we cannot insert any new data at all. We can even verify this by querying for the health of the <code>keeper</code> node:</p>
+<pre style="background-color:#151515;color:#e8e8d3;"><code><span>$ echo mntr | nc localhost 9183            
+</span><span>This instance is not currently serving requests%                                                                                                                              
+</span></code></pre>
+<h3 id="add-a-new-shard">Add a new shard</h3>
+<p><img src="../../images/clickhouse-cluster-orange-shard.png" alt="image" /></p>
+<p>Alright, so our tests so far have been quite good and show that the cluster is resilient to failures as long as there exists a <code>keeper</code> node running as <code>leader</code> mode in the quorum. Now, let's see how to add a new shard. We'll extend our <code>docker-compose.yml</code> to add a new <code>orange</code> shard:</p>
+<pre data-lang="yml" style="background-color:#151515;color:#e8e8d3;" class="language-yml "><code class="language-yml" data-lang="yml"><span>  </span><span style="color:#ffb964;">clickhouse-orange-1</span><span>:
+</span><span>    &lt;&lt;: </span><span style="color:#8fbfdc;">*</span><span style="color:#ffb964;">clickhouse-defaults
+</span><span>    </span><span style="color:#ffb964;">container_name</span><span>: </span><span style="color:#99ad6a;">clickhouse-orange-1
+</span><span>    </span><span style="color:#ffb964;">hostname</span><span>: </span><span style="color:#99ad6a;">clickhouse-orange-1
+</span><span>    </span><span style="color:#ffb964;">ports</span><span>:
+</span><span>      - </span><span style="color:#99ad6a;">9004:9000
+</span><span>      - </span><span style="color:#99ad6a;">8127:8123
+</span><span>      - </span><span style="color:#99ad6a;">9185:9181
+</span><span>    </span><span style="color:#ffb964;">volumes</span><span>:
+</span><span>      - </span><span style="color:#ffb964;">type</span><span>: </span><span style="color:#99ad6a;">volume
+</span><span>        </span><span style="color:#ffb964;">source</span><span>: </span><span style="color:#99ad6a;">ch-orange-1-data
+</span><span>        </span><span style="color:#ffb964;">target</span><span>: </span><span style="color:#99ad6a;">/var/lib/clickhouse
+</span><span>      - </span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">./configs/gen/clickhouse-orange-1:/etc/clickhouse-server/config.d/</span><span style="color:#556633;">&quot;
+</span></code></pre>
+<p>Inside our <code>remote_servers.xml</code>, we'll add the <code>orange</code> shard as well:</p>
+<pre data-lang="xml" style="background-color:#151515;color:#e8e8d3;" class="language-xml "><code class="language-xml" data-lang="xml"><span> &lt;</span><span style="color:#ffb964;">shard</span><span>&gt;
+</span><span>     &lt;</span><span style="color:#ffb964;">internal_replication</span><span>&gt;true&lt;/</span><span style="color:#ffb964;">internal_replication</span><span>&gt;
+</span><span>     &lt;</span><span style="color:#ffb964;">replica</span><span>&gt;
+</span><span>         &lt;</span><span style="color:#ffb964;">host</span><span>&gt;clickhouse-orange-1&lt;/</span><span style="color:#ffb964;">host</span><span>&gt;
+</span><span>         &lt;</span><span style="color:#ffb964;">port</span><span>&gt;9000&lt;/</span><span style="color:#ffb964;">port</span><span>&gt;
+</span><span>     &lt;/</span><span style="color:#ffb964;">replica</span><span>&gt;
+</span><span> &lt;/</span><span style="color:#ffb964;">shard</span><span>&gt;
+</span></code></pre>
+<p>That's pretty much it. Let's start the new replica:</p>
+<pre data-lang="bash" style="background-color:#151515;color:#e8e8d3;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#ffb964;">docker-compose</span><span> up
+</span></code></pre>
+<p>Let's insert some data and query if the shard is getting data or not:</p>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>SELECT
+</span><span>    hostName(),
+</span><span>    </span><span style="color:#ffb964;">*
+</span><span>FROM remote(</span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">172.20.0.2</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">app</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">events_local</span><span style="color:#556633;">&#39;</span><span>)
+</span><span>
+</span><span>Received exception from server (version </span><span style="color:#cf6a4c;">21</span><span>.</span><span style="color:#cf6a4c;">12</span><span>.</span><span style="color:#cf6a4c;">2</span><span>):
+</span><span>Code: </span><span style="color:#cf6a4c;">519</span><span>. DB::Exception: Received from localhost:</span><span style="color:#cf6a4c;">9000</span><span>. DB::Exception: All attempts to get table structure failed. Log: 
+</span><span>
+</span><span>Code: </span><span style="color:#cf6a4c;">279</span><span>. DB::NetException: All connection tries failed. Log: 
+</span><span>
+</span><span>There is no table </span><span style="color:#556633;">`</span><span style="color:#99ad6a;">app</span><span style="color:#556633;">`</span><span>.</span><span style="color:#556633;">`</span><span style="color:#99ad6a;">events_local</span><span style="color:#556633;">`</span><span> on server: </span><span style="color:#cf6a4c;">172</span><span>.</span><span style="color:#cf6a4c;">20</span><span>.</span><span style="color:#cf6a4c;">0</span><span>.</span><span style="color:#cf6a4c;">2</span><span>:</span><span style="color:#cf6a4c;">9000
+</span><span>
+</span><span>. (ALL_CONNECTION_TRIES_FAILED) (version </span><span style="color:#cf6a4c;">21</span><span>.</span><span style="color:#cf6a4c;">12</span><span>.</span><span style="color:#cf6a4c;">2</span><span>.</span><span style="color:#cf6a4c;">17</span><span> (official build))
+</span><span>
+</span><span>. (NO_REMOTE_SHARD_AVAILABLE)
+</span></code></pre>
+<p>Houston, we have a problem. </p>
+<pre style="background-color:#151515;color:#e8e8d3;"><code><span>&gt; There is no table `app`.`events_local` on server: 172.20.0.2:9000
+</span></code></pre>
+<p>This is mentioned in the ClickHouse docs on <a href="https://clickhouse.com/docs/en/engines/table-engines/mergetree-family/replication/">Replication</a>:</p>
+<blockquote>
+<p>CREATE, DROP, ATTACH, DETACH and RENAME queries are executed on a single server and are not replicated:</p>
+</blockquote>
+<p>This means that although we'd run <code>CREATE DATABASE</code> and <code>CREATE TABLE</code> commands using <code>ON CLUSTER</code> which executes on all servers, but since the <code>orange-1</code> node is introduced <em>after</em> we ran that command, we need to manually create the DB and Table here. We have to execute the below commands <em>inside</em> the <code>orange-1</code> replica:</p>
+<pre data-lang="sql" style="background-color:#151515;color:#e8e8d3;" class="language-sql "><code class="language-sql" data-lang="sql"><span>CREATE DATABASE </span><span style="color:#fad07a;">app</span><span>;
+</span><span>
+</span><span>CREATE TABLE app.</span><span style="color:#fad07a;">events_local</span><span> (
+</span><span>    </span><span style="color:#8fbfdc;">time DateTime</span><span>,
+</span><span>    event_id  Int32,
+</span><span>    uuid UUID
+</span><span>)
+</span><span>ENGINE = ReplicatedMergeTree(</span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">/clickhouse/tables/{cluster}/{shard}/{table}</span><span style="color:#556633;">&#39;</span><span>, </span><span style="color:#556633;">&#39;</span><span style="color:#99ad6a;">{replica}</span><span style="color:#556633;">&#39;</span><span>)
+</span><span>PARTITION BY toYYYYMM(</span><span style="color:#8fbfdc;">time</span><span>)
+</span><span>ORDER BY (event_id);
+</span></code></pre>
+<p>That's all that is required. Adding a new replica is also the same process.</p>
+<h2 id="summary">Summary</h2>
+<p>Hope this tutorial helped you figure out how to use <code>clickhouse-keeper</code> to set up a distributed ClickHouse cluster DB. <code>clickhouse-keeper</code> is still a relatively new feature as the docs mention already, but given that it solves operations overhead of running a Zookeeper cluster, it's worth checking it out.</p>
+<h3 id="references">References</h3>
+<ul>
+<li><a href="https://www.youtube.com/watch?v=abhcCRW09Ac">https://www.youtube.com/watch?v=abhcCRW09Ac</a>
+<ul>
+<li>Slides used in above talk: <a href="https://presentations.clickhouse.com/meetup54/keeper.pdf">https://presentations.clickhouse.com/meetup54/keeper.pdf</a></li>
+</ul>
+</li>
+<li><a href="https://clickhouse.com/docs/en/operations/clickhouse-keeper/">https://clickhouse.com/docs/en/operations/clickhouse-keeper</a></li>
+<li><a href="https://github.com/ClickHouse/ClickHouse/tree/master/tests/integration/test_keeper_multinode_simple">https://github.com/ClickHouse/ClickHouse/tree/master/tests/integration/test_keeper_multinode_simple</a></li>
+<li><a href="https://github.com/ClickHouse/ClickHouse/issues/2161">https://github.com/ClickHouse/ClickHouse/issues/2161</a></li>
+</ul>
+<p>For the full code/config samples, you can check out the <a href="https://github.com/mr-karan/clickhouse-keeper-example">repo</a>.</p>
+<p>Fin!</p>
+<h3 id="updates">Updates</h3>
+<ul>
+<li>If you have setup RBAC on your cluster, make sure you add <code>&lt;user&gt;</code> and <code>&lt;password&gt;</code> fields to the <code>&lt;remote_server&gt;</code> configuration.</li>
+</ul>
+</article>
+</section>
+</article>
+    <footer>
+        <div class="social">
+            <ul>
+                <li>
+                    <a href="https://github.com/mr-karan" title="Github"><i data-feather="github"></i></a>
+                </li>
+                <li>
+                    <a href="https://twitter.com/mrkaran_" title="Twitter"><i data-feather="twitter"></i></a>
+                </li>
+                <li>
+                    <a href="https://mrkaran.dev/atom.xml" title="Karan Sharma"><i
+                            data-feather="rss"></i></a>
+                </li>
+            </ul>
+        </div>
+        <p>
+            © Karan Sharma 2022<br>
+            Powered by <a target="_blank" href="https://getzola.org/">Zola</a>
+        </p>
+    </footer>
+    <script defer data-domain="mrkaran.dev" src="https://pls.mrkaran.dev/pls.js"></script>
+    <script>
+        feather.replace();
+    </script>
+    <!-- <script type="text/javascript" src="https://mrkaran.dev/elasticlunr.min.js"></script>
+    <script type="text/javascript" src="https://mrkaran.dev/search_index.en.js"></script>
+    <script type="text/javascript" src="https://mrkaran.dev/js/search.js"></script> -->
+</body>
+
+</html>
